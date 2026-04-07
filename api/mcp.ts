@@ -14,24 +14,34 @@ function getClients() {
     gmail: google.gmail({ version: 'v1', auth }),
     drive: google.drive({ version: 'v3', auth }),
     docs: google.docs({ version: 'v1', auth }),
+    sheets: google.sheets({ version: 'v4', auth }),
     calendar: google.calendar({ version: 'v3', auth }),
+    people: google.people({ version: 'v1', auth }),
   };
 }
 
 const TOOLS = [
+  // Auth
   {
     name: 'get_auth_url',
     description: 'Get Google OAuth URL to authorize a Google account',
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'get_profile',
+    description: 'Get Gmail profile info (email, total messages, threads)',
+    inputSchema: { type: 'object', properties: {} },
+  },
+
+  // Gmail
+  {
     name: 'search_emails',
-    description: 'Search Gmail inbox/sent messages',
+    description: 'Search Gmail messages',
     inputSchema: {
       type: 'object',
       required: ['query'],
       properties: {
-        query: { type: 'string', description: 'Gmail search query' },
+        query: { type: 'string', description: 'Gmail search query (e.g. "in:inbox", "from:user@example.com")' },
         maxResults: { type: 'number', description: 'Max results (default 10)' },
       },
     },
@@ -55,7 +65,38 @@ const TOOLS = [
         to: { type: 'string' },
         subject: { type: 'string' },
         body: { type: 'string' },
-        replyToMessageId: { type: 'string' },
+        replyToMessageId: { type: 'string', description: 'Message ID to reply to (sets threadId)' },
+      },
+    },
+  },
+  {
+    name: 'delete_email',
+    description: 'Move an email to trash',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId'],
+      properties: { messageId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'archive_email',
+    description: 'Archive an email (remove from inbox without deleting)',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId'],
+      properties: { messageId: { type: 'string' } },
+    },
+  },
+  {
+    name: 'label_email',
+    description: 'Add or remove labels on an email (e.g. STARRED, IMPORTANT, UNREAD)',
+    inputSchema: {
+      type: 'object',
+      required: ['messageId'],
+      properties: {
+        messageId: { type: 'string' },
+        addLabels: { type: 'array', items: { type: 'string' }, description: 'Label IDs to add' },
+        removeLabels: { type: 'array', items: { type: 'string' }, description: 'Label IDs to remove' },
       },
     },
   },
@@ -70,6 +111,8 @@ const TOOLS = [
       },
     },
   },
+
+  // Drive
   {
     name: 'search_files',
     description: 'Search files in Google Drive',
@@ -85,13 +128,57 @@ const TOOLS = [
   },
   {
     name: 'read_file',
-    description: 'Read content of a Google Drive file',
+    description: 'Read content of a Google Drive file (Docs, Sheets, plain files)',
     inputSchema: {
       type: 'object',
       required: ['fileId'],
       properties: { fileId: { type: 'string' } },
     },
   },
+  {
+    name: 'list_folder',
+    description: 'List files in a Google Drive folder',
+    inputSchema: {
+      type: 'object',
+      properties: { folderId: { type: 'string', description: 'Folder ID (default: root)' } },
+    },
+  },
+  {
+    name: 'create_folder',
+    description: 'Create a folder in Google Drive',
+    inputSchema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string' },
+        parentFolderId: { type: 'string', description: 'Parent folder ID (default: root)' },
+      },
+    },
+  },
+  {
+    name: 'share_file',
+    description: 'Share a Google Drive file or folder with a user',
+    inputSchema: {
+      type: 'object',
+      required: ['fileId', 'email'],
+      properties: {
+        fileId: { type: 'string' },
+        email: { type: 'string' },
+        role: { type: 'string', description: 'reader | commenter | writer (default: reader)' },
+      },
+    },
+  },
+  {
+    name: 'delete_file',
+    description: 'Move a Google Drive file to trash',
+    inputSchema: {
+      type: 'object',
+      required: ['fileId'],
+      properties: { fileId: { type: 'string' } },
+    },
+  },
+
+  // Docs
   {
     name: 'create_doc',
     description: 'Create a new Google Doc',
@@ -124,20 +211,50 @@ const TOOLS = [
       required: ['fileId', 'find', 'replace'],
       properties: {
         fileId: { type: 'string' },
-        find: { type: 'string', description: 'Text to find' },
-        replace: { type: 'string', description: 'Text to replace with' },
+        find: { type: 'string' },
+        replace: { type: 'string' },
         matchCase: { type: 'boolean', description: 'Case sensitive (default false)' },
       },
     },
   },
+
+  // Sheets
   {
-    name: 'list_folder',
-    description: 'List files in a Google Drive folder',
+    name: 'create_spreadsheet',
+    description: 'Create a new Google Spreadsheet',
     inputSchema: {
       type: 'object',
-      properties: { folderId: { type: 'string' } },
+      required: ['title'],
+      properties: { title: { type: 'string' } },
     },
   },
+  {
+    name: 'read_spreadsheet',
+    description: 'Read rows from a Google Spreadsheet range',
+    inputSchema: {
+      type: 'object',
+      required: ['spreadsheetId'],
+      properties: {
+        spreadsheetId: { type: 'string' },
+        range: { type: 'string', description: 'A1 notation, e.g. "Sheet1!A1:D10" (default: Sheet1)' },
+      },
+    },
+  },
+  {
+    name: 'write_spreadsheet',
+    description: 'Write rows to a Google Spreadsheet',
+    inputSchema: {
+      type: 'object',
+      required: ['spreadsheetId', 'range', 'values'],
+      properties: {
+        spreadsheetId: { type: 'string' },
+        range: { type: 'string', description: 'A1 notation, e.g. "Sheet1!A1"' },
+        values: { type: 'array', items: { type: 'array' }, description: '2D array of values' },
+      },
+    },
+  },
+
+  // Calendar
   {
     name: 'list_events',
     description: 'List upcoming Google Calendar events',
@@ -145,8 +262,8 @@ const TOOLS = [
       type: 'object',
       properties: {
         calendarId: { type: 'string' },
-        timeMin: { type: 'string' },
-        timeMax: { type: 'string' },
+        timeMin: { type: 'string', description: 'ISO 8601 start time (default: now)' },
+        timeMax: { type: 'string', description: 'ISO 8601 end time' },
         maxResults: { type: 'number' },
       },
     },
@@ -159,10 +276,39 @@ const TOOLS = [
       required: ['summary', 'start', 'end'],
       properties: {
         summary: { type: 'string' },
+        start: { type: 'string', description: 'ISO 8601 datetime' },
+        end: { type: 'string', description: 'ISO 8601 datetime' },
+        description: { type: 'string' },
+        attendees: { type: 'array', items: { type: 'string' }, description: 'List of email addresses' },
+      },
+    },
+  },
+  {
+    name: 'update_event',
+    description: 'Update a Google Calendar event',
+    inputSchema: {
+      type: 'object',
+      required: ['eventId'],
+      properties: {
+        eventId: { type: 'string' },
+        calendarId: { type: 'string' },
+        summary: { type: 'string' },
         start: { type: 'string' },
         end: { type: 'string' },
         description: { type: 'string' },
         attendees: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  },
+  {
+    name: 'delete_event',
+    description: 'Delete a Google Calendar event',
+    inputSchema: {
+      type: 'object',
+      required: ['eventId'],
+      properties: {
+        eventId: { type: 'string' },
+        calendarId: { type: 'string' },
       },
     },
   },
@@ -178,16 +324,38 @@ const TOOLS = [
       },
     },
   },
+
+  // Contacts
+  {
+    name: 'get_contacts',
+    description: 'List Google Contacts',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxResults: { type: 'number', description: 'Max contacts to return (default 20)' },
+        query: { type: 'string', description: 'Search query to filter contacts' },
+      },
+    },
+  },
 ];
 
+const encodeHeader = (s: string) =>
+  /[^\x00-\x7F]/.test(s) ? `=?UTF-8?B?${Buffer.from(s, 'utf-8').toString('base64')}?=` : s;
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const { gmail, drive, docs, calendar } = getClients();
+  const { gmail, drive, docs, sheets, calendar, people } = getClients();
 
   switch (name) {
     case 'get_auth_url': {
       const auth = createOAuth2Client();
       const url = auth.generateAuthUrl({ access_type: 'offline', scope: SCOPES, prompt: 'consent' });
       return `Open this URL to authorize a Google account:\n\n${url}`;
+    }
+
+    case 'get_profile': {
+      const res = await gmail.users.getProfile({ userId: 'me' });
+      const d = res.data;
+      return `Email: ${d.emailAddress}\nTotal messages: ${d.messagesTotal}\nTotal threads: ${d.threadsTotal}`;
     }
 
     case 'search_emails': {
@@ -205,23 +373,47 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     case 'read_email': {
       const res = await gmail.users.messages.get({ userId: 'me', id: args.messageId as string, format: 'full' });
       const h = res.data.payload?.headers ?? [];
-      const g = (n: string) => h.find((x: {name?: string|null}) => x.name === n)?.value ?? '';
+      const g = (n: string) => h.find((x: { name?: string | null }) => x.name === n)?.value ?? '';
       const parts = res.data.payload?.parts ?? [];
-      const textPart = parts.find((p: {mimeType?: string|null}) => p.mimeType === 'text/plain') ?? parts[0];
+      const textPart = parts.find((p: { mimeType?: string | null }) => p.mimeType === 'text/plain') ?? parts[0];
       let body = '';
-      if ((textPart as {body?: {data?: string|null}})?.body?.data) body = Buffer.from((textPart as {body: {data: string}}).body.data, 'base64').toString('utf-8');
-      else if (res.data.payload?.body?.data) body = Buffer.from(res.data.payload.body.data, 'base64').toString('utf-8');
+      if ((textPart as { body?: { data?: string | null } })?.body?.data)
+        body = Buffer.from((textPart as { body: { data: string } }).body.data, 'base64').toString('utf-8');
+      else if (res.data.payload?.body?.data)
+        body = Buffer.from(res.data.payload.body.data, 'base64').toString('utf-8');
       return `From: ${g('From')}\nTo: ${g('To')}\nDate: ${g('Date')}\nSubject: ${g('Subject')}\n\n${body}`;
     }
 
     case 'send_email': {
-      const encodeHeader = (s: string) => /[^\x00-\x7F]/.test(s) ? `=?UTF-8?B?${Buffer.from(s, 'utf-8').toString('base64')}?=` : s;
       const subject = encodeHeader(args.subject as string);
-      const raw = Buffer.from(`To: ${args.to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${args.body}`).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const raw = Buffer.from(`To: ${args.to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${args.body}`)
+        .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       const requestBody: { raw: string; threadId?: string } = { raw };
       if (args.replyToMessageId) requestBody.threadId = args.replyToMessageId as string;
       const res = await gmail.users.messages.send({ userId: 'me', requestBody });
       return `Email sent. Message ID: ${res.data.id}`;
+    }
+
+    case 'delete_email': {
+      await gmail.users.messages.trash({ userId: 'me', id: args.messageId as string });
+      return `Message ${args.messageId} moved to trash.`;
+    }
+
+    case 'archive_email': {
+      await gmail.users.messages.modify({ userId: 'me', id: args.messageId as string, requestBody: { removeLabelIds: ['INBOX'] } });
+      return `Message ${args.messageId} archived.`;
+    }
+
+    case 'label_email': {
+      await gmail.users.messages.modify({
+        userId: 'me',
+        id: args.messageId as string,
+        requestBody: {
+          addLabelIds: (args.addLabels as string[]) ?? [],
+          removeLabelIds: (args.removeLabels as string[]) ?? [],
+        },
+      });
+      return `Labels updated on message ${args.messageId}.`;
     }
 
     case 'list_threads': {
@@ -256,6 +448,43 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       return String(res.data);
     }
 
+    case 'list_folder': {
+      const parent = (args.folderId as string) ?? 'root';
+      const res = await drive.files.list({ q: `'${parent}' in parents and trashed=false`, fields: 'files(id,name,mimeType)', pageSize: 50 });
+      const files = res.data.files ?? [];
+      if (!files.length) return 'Folder is empty.';
+      return files.map(f => `${f.mimeType?.includes('folder') ? '📁' : '📄'} ${f.name}  (${f.id})`).join('\n');
+    }
+
+    case 'create_folder': {
+      const res = await drive.files.create({
+        requestBody: {
+          name: args.name as string,
+          mimeType: 'application/vnd.google-apps.folder',
+          parents: args.parentFolderId ? [args.parentFolderId as string] : undefined,
+        },
+        fields: 'id,name',
+      });
+      return `Folder created: ${res.data.name} (ID: ${res.data.id})`;
+    }
+
+    case 'share_file': {
+      await drive.permissions.create({
+        fileId: args.fileId as string,
+        requestBody: {
+          type: 'user',
+          role: (args.role as string) ?? 'reader',
+          emailAddress: args.email as string,
+        },
+      });
+      return `Shared ${args.fileId} with ${args.email} as ${(args.role as string) ?? 'reader'}.`;
+    }
+
+    case 'delete_file': {
+      await drive.files.update({ fileId: args.fileId as string, requestBody: { trashed: true } });
+      return `File ${args.fileId} moved to trash.`;
+    }
+
     case 'create_doc': {
       const doc = await docs.documents.create({ requestBody: { title: args.title as string } });
       const docId = doc.data.documentId!;
@@ -288,12 +517,27 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       return `Replaced ${count} occurrence(s) of "${args.find}" → "${args.replace}"`;
     }
 
-    case 'list_folder': {
-      const parent = (args.folderId as string) ?? 'root';
-      const res = await drive.files.list({ q: `'${parent}' in parents and trashed=false`, fields: 'files(id,name,mimeType)', pageSize: 50 });
-      const files = res.data.files ?? [];
-      if (!files.length) return 'Folder is empty.';
-      return files.map(f => `${f.mimeType?.includes('folder') ? '📁' : '📄'} ${f.name}  (${f.id})`).join('\n');
+    case 'create_spreadsheet': {
+      const res = await sheets.spreadsheets.create({ requestBody: { properties: { title: args.title as string } } });
+      return `Created: https://docs.google.com/spreadsheets/d/${res.data.spreadsheetId}`;
+    }
+
+    case 'read_spreadsheet': {
+      const range = (args.range as string) ?? 'Sheet1';
+      const res = await sheets.spreadsheets.values.get({ spreadsheetId: args.spreadsheetId as string, range });
+      const rows = res.data.values ?? [];
+      if (!rows.length) return 'No data found.';
+      return rows.map(r => r.join('\t')).join('\n');
+    }
+
+    case 'write_spreadsheet': {
+      const res = await sheets.spreadsheets.values.update({
+        spreadsheetId: args.spreadsheetId as string,
+        range: args.range as string,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: args.values as string[][] },
+      });
+      return `Updated ${res.data.updatedCells} cells in ${res.data.updatedRange}.`;
     }
 
     case 'list_events': {
@@ -324,10 +568,64 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       return `Event created: ${res.data.htmlLink}`;
     }
 
+    case 'update_event': {
+      const existing = await calendar.events.get({ calendarId: (args.calendarId as string) ?? 'primary', eventId: args.eventId as string });
+      const e = existing.data;
+      const res = await calendar.events.update({
+        calendarId: (args.calendarId as string) ?? 'primary',
+        eventId: args.eventId as string,
+        requestBody: {
+          summary: (args.summary as string) ?? e.summary,
+          description: (args.description as string) ?? e.description,
+          start: args.start ? { dateTime: args.start as string } : e.start,
+          end: args.end ? { dateTime: args.end as string } : e.end,
+          attendees: args.attendees ? (args.attendees as string[]).map(email => ({ email })) : e.attendees,
+        },
+      });
+      return `Event updated: ${res.data.htmlLink}`;
+    }
+
+    case 'delete_event': {
+      await calendar.events.delete({ calendarId: (args.calendarId as string) ?? 'primary', eventId: args.eventId as string });
+      return `Event ${args.eventId} deleted.`;
+    }
+
     case 'get_event': {
       const res = await calendar.events.get({ calendarId: (args.calendarId as string) ?? 'primary', eventId: args.eventId as string });
       const e = res.data;
       return [`Title: ${e.summary}`, `Start: ${e.start?.dateTime ?? e.start?.date}`, `End: ${e.end?.dateTime ?? e.end?.date}`, `Description: ${e.description ?? '—'}`, `Attendees: ${e.attendees?.map(a => a.email).join(', ') ?? '—'}`, `Link: ${e.htmlLink}`].join('\n');
+    }
+
+    case 'get_contacts': {
+      if (args.query) {
+        const res = await people.people.searchContacts({
+          query: args.query as string,
+          pageSize: (args.maxResults as number) ?? 20,
+          readMask: 'names,emailAddresses,phoneNumbers',
+        });
+        const results = res.data.results ?? [];
+        if (!results.length) return 'No contacts found.';
+        return results.map(r => {
+          const p = r.person;
+          const name = p?.names?.[0]?.displayName ?? '—';
+          const email = p?.emailAddresses?.[0]?.value ?? '—';
+          const phone = p?.phoneNumbers?.[0]?.value ?? '—';
+          return `Name: ${name}\nEmail: ${email}\nPhone: ${phone}`;
+        }).join('\n---\n');
+      }
+      const res = await people.people.connections.list({
+        resourceName: 'people/me',
+        pageSize: (args.maxResults as number) ?? 20,
+        personFields: 'names,emailAddresses,phoneNumbers',
+      });
+      const contacts = res.data.connections ?? [];
+      if (!contacts.length) return 'No contacts found.';
+      return contacts.map(p => {
+        const name = p.names?.[0]?.displayName ?? '—';
+        const email = p.emailAddresses?.[0]?.value ?? '—';
+        const phone = p.phoneNumbers?.[0]?.value ?? '—';
+        return `Name: ${name}\nEmail: ${email}\nPhone: ${phone}`;
+      }).join('\n---\n');
     }
 
     default:
