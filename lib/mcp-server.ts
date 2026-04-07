@@ -107,14 +107,9 @@ export function createMcpServer(): McpServer {
         .replace(/\//g, '_')
         .replace(/=+$/, '');
 
-      const params: Parameters<typeof gmail.users.messages.send>[0] = {
-        userId: 'me',
-        requestBody: { raw },
-      };
-      if (replyToMessageId) {
-        params.requestBody!.threadId = replyToMessageId;
-      }
-      const res = await gmail.users.messages.send(params);
+      const requestBody: { raw: string; threadId?: string } = { raw };
+      if (replyToMessageId) requestBody.threadId = replyToMessageId;
+      const res = await gmail.users.messages.send({ userId: 'me', requestBody });
       return { content: [{ type: 'text', text: `Email sent. Message ID: ${res.data.id}` }] };
     }
   );
@@ -142,7 +137,7 @@ export function createMcpServer(): McpServer {
     'search_files',
     'Search files in Google Drive',
     {
-      query: z.string().describe('Drive query string (e.g. "name contains \'invoice\'"'))  ,
+      query: z.string().describe("Drive query string (e.g. \"name contains 'invoice'\")"),
       mimeType: z.string().optional().describe('Filter by MIME type (e.g. "application/vnd.google-apps.document")'),
       maxResults: z.number().optional().default(10).describe('Max number of results'),
     },

@@ -32,7 +32,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } else {
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
-        onsessioninitialized: (id) => sessions.set(id, transport),
+        onsessioninitialized: (id) => { sessions.set(id, transport); },
       });
       const server = createMcpServer();
       await server.connect(transport);
