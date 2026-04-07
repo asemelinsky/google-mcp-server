@@ -1,0 +1,23 @@
+{
+  "name": "google-mcp-server",
+  "version": "1.0.0",
+  "description": "Custom MCP server: Gmail + Drive + Calendar for Claude",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@vercel/node": "^3.0.0",
+    "googleapis": "^140.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vercel": "^37.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

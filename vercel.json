@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "functions": {
+    "api/mcp.ts": {
+      "maxDuration": 60
+    },
+    "api/auth/google.ts": {
+      "maxDuration": 30
+    },
+    "api/auth/callback.ts": {
+      "maxDuration": 30
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/mcp",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "https://claude.ai" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization, Mcp-Session-Id" },
+        { "key": "Access-Control-Expose-Headers", "value": "Mcp-Session-Id" }
+      ]
+    }
+  ]
+}
