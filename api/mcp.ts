@@ -9,8 +9,11 @@ function authError(res: VercelResponse) {
 }
 
 function validateBearer(req: VercelRequest): boolean {
+  // Accept token via Authorization header OR ?token= query param
   const auth = req.headers['authorization'] ?? '';
-  return auth === `Bearer ${process.env.MCP_SECRET_TOKEN}`;
+  if (auth === `Bearer ${process.env.MCP_SECRET_TOKEN}`) return true;
+  const queryToken = req.query['token'] as string | undefined;
+  return queryToken === process.env.MCP_SECRET_TOKEN;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
