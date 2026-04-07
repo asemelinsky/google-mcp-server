@@ -201,7 +201,9 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     }
 
     case 'send_email': {
-      const raw = Buffer.from(`To: ${args.to}\r\nSubject: ${args.subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${args.body}`).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const encodeHeader = (s: string) => /[^\x00-\x7F]/.test(s) ? `=?UTF-8?B?${Buffer.from(s, 'utf-8').toString('base64')}?=` : s;
+      const subject = encodeHeader(args.subject as string);
+      const raw = Buffer.from(`To: ${args.to}\r\nSubject: ${subject}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${args.body}`).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       const requestBody: { raw: string; threadId?: string } = { raw };
       if (args.replyToMessageId) requestBody.threadId = args.replyToMessageId as string;
       const res = await gmail.users.messages.send({ userId: 'me', requestBody });
