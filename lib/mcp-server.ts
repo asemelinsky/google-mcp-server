@@ -3,12 +3,9 @@ import { google } from 'googleapis';
 import { createOAuth2Client, SCOPES } from './google-client.js';
 import { z } from 'zod';
 
-export function createMcpServer(
-  getSessionToken?: () => string | undefined,
-  setSessionToken?: (token: string) => void
-): McpServer {
+export function createMcpServer(): McpServer {
   function getClients() {
-    const auth = createOAuth2Client(getSessionToken?.());
+    const auth = createOAuth2Client();
     return {
       gmail: google.gmail({ version: 'v1', auth }),
       drive: google.drive({ version: 'v3', auth }),
@@ -46,16 +43,11 @@ export function createMcpServer(
 
   server.tool(
     'authorize',
-    'Set a Google refresh token for this session (obtained from get_auth_url flow)',
+    'Verify a Google refresh token and show which account it belongs to',
     {
       refresh_token: z.string().describe('Refresh token from the OAuth callback page'),
     },
     async ({ refresh_token }) => {
-      if (!setSessionToken) {
-        return { content: [{ type: 'text', text: 'Session token storage not available.' }] };
-      }
-      setSessionToken(refresh_token);
-      // verify it works
       try {
         const auth = createOAuth2Client(refresh_token);
         const gmail = google.gmail({ version: 'v1', auth });
@@ -63,11 +55,11 @@ export function createMcpServer(
         return {
           content: [{
             type: 'text',
-            text: `✅ Authorized! Now using Google account: ${profile.data.emailAddress}`,
+            text: `✅ Token is valid for: ${profile.data.emailAddress}\n\nTo use this account by default, the server admin needs to update GOOGLE_REFRESH_TOKEN in Vercel.`,
           }],
         };
       } catch {
-        return { content: [{ type: 'text', text: '✅ Token set for this session. (Could not verify account — will try on next tool call.)' }] };
+        return { content: [{ type: 'text', text: '❌ Invalid refresh token.' }] };
       }
     }
   );

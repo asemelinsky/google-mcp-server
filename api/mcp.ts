@@ -2,18 +2,6 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from '../lib/mcp-server.js';
 
-interface SessionState {
-  transport: StreamableHTTPServerTransport;
-  getToken: () => string | undefined;
-  setToken: (token: string) => void;
-}
-
-const sessions = new Map<string, SessionState>();
-
-function authError(res: VercelResponse) {
-  res.status(401).json({ error: 'Unauthorized' });
-}
-
 function validateBearer(req: VercelRequest): boolean {
   const auth = req.headers['authorization'] ?? '';
   if (auth === `Bearer ${process.env.MCP_SECRET_TOKEN}`) return true;
@@ -27,40 +15,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  if (!validateBearer(req)) return authError(res);
-
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-  if (req.method === 'POST') {
-    let state: SessionState;
-
-    if (sessionId && sessions.has(sessionId)) {
-      state = sessions.get(sessionId)!;
-    } else {
-      let sessionToken: string | undefined;
-      const getToken = () => sessionToken;
-      const setToken = (t: string) => { sessionToken = t; };
-
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        onsessioninitialized: (id) => { sessions.set(id, state); },
-      });
-
-      state = { transport, getToken, setToken };
-      const server = createMcpServer(getToken, setToken);
-      await server.connect(transport);
-    }
-
-    await state.transport.handleRequest(req, res, req.body);
+  if (!validateBearer(req)) {
+    res.status(401).json({ error: 'Unauthorized' });
     return;
   }
 
-  if (req.method === 'GET') {
-    if (!sessionId || !sessions.has(sessionId)) {
-      res.status(400).json({ error: 'Missing or unknown session ID' });
-      return;
-    }
-    await sessions.get(sessionId)!.transport.handleRequest(req, res);
+  if (req.method === 'POST') {
+    // Stateless: create a fresh server+transport for every request
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined, // stateless — no session tracking
+    });
+
+    const server = createMcpServer();
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
     return;
   }
 
