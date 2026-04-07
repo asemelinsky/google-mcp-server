@@ -117,6 +117,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'replace_in_doc',
+    description: 'Find and replace text in a Google Doc',
+    inputSchema: {
+      type: 'object',
+      required: ['fileId', 'find', 'replace'],
+      properties: {
+        fileId: { type: 'string' },
+        find: { type: 'string', description: 'Text to find' },
+        replace: { type: 'string', description: 'Text to replace with' },
+        matchCase: { type: 'boolean', description: 'Case sensitive (default false)' },
+      },
+    },
+  },
+  {
     name: 'list_folder',
     description: 'List files in a Google Drive folder',
     inputSchema: {
@@ -256,6 +270,22 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       const endIndex = doc.data.body?.content?.slice(-1)[0]?.endIndex ?? 1;
       await docs.documents.batchUpdate({ documentId: args.fileId as string, requestBody: { requests: [{ insertText: { location: { index: endIndex - 1 }, text: '\n' + args.content } }] } });
       return `Updated document ${args.fileId}`;
+    }
+
+    case 'replace_in_doc': {
+      const res = await docs.documents.batchUpdate({
+        documentId: args.fileId as string,
+        requestBody: {
+          requests: [{
+            replaceAllText: {
+              containsText: { text: args.find as string, matchCase: (args.matchCase as boolean) ?? false },
+              replaceText: args.replace as string,
+            },
+          }],
+        },
+      });
+      const count = (res.data.replies?.[0] as { replaceAllText?: { occurrencesChanged?: number } })?.replaceAllText?.occurrencesChanged ?? 0;
+      return `Replaced ${count} occurrence(s) of "${args.find}" → "${args.replace}"`;
     }
 
     case 'list_folder': {
