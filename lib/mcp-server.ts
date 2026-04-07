@@ -1,23 +1,76 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { google } from 'googleapis';
-import { createOAuth2Client } from './google-client.js';
+import { createOAuth2Client, SCOPES } from './google-client.js';
 import { z } from 'zod';
 
-function getClients() {
-  const auth = createOAuth2Client();
-  return {
-    gmail: google.gmail({ version: 'v1', auth }),
-    drive: google.drive({ version: 'v3', auth }),
-    docs: google.docs({ version: 'v1', auth }),
-    calendar: google.calendar({ version: 'v3', auth }),
-  };
-}
+export function createMcpServer(
+  getSessionToken?: () => string | undefined,
+  setSessionToken?: (token: string) => void
+): McpServer {
+  function getClients() {
+    const auth = createOAuth2Client(getSessionToken?.());
+    return {
+      gmail: google.gmail({ version: 'v1', auth }),
+      drive: google.drive({ version: 'v3', auth }),
+      docs: google.docs({ version: 'v1', auth }),
+      calendar: google.calendar({ version: 'v3', auth }),
+    };
+  }
 
-export function createMcpServer(): McpServer {
   const server = new McpServer({
     name: 'google-mcp-server',
     version: '1.0.0',
   });
+
+  // ─── AUTH TOOLS ──────────────────────────────────────────────────────────
+
+  server.tool(
+    'get_auth_url',
+    'Get Google OAuth URL to authorize a Google account for this session',
+    {},
+    async () => {
+      const auth = createOAuth2Client();
+      const url = auth.generateAuthUrl({
+        access_type: 'offline',
+        scope: SCOPES,
+        prompt: 'consent',
+      });
+      return {
+        content: [{
+          type: 'text',
+          text: `Open this URL in your browser to authorize a Google account:\n\n${url}\n\nAfter authorization, you will see a refresh token on the page. Copy it and call the \`authorize\` tool with that token.`,
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    'authorize',
+    'Set a Google refresh token for this session (obtained from get_auth_url flow)',
+    {
+      refresh_token: z.string().describe('Refresh token from the OAuth callback page'),
+    },
+    async ({ refresh_token }) => {
+      if (!setSessionToken) {
+        return { content: [{ type: 'text', text: 'Session token storage not available.' }] };
+      }
+      setSessionToken(refresh_token);
+      // verify it works
+      try {
+        const auth = createOAuth2Client(refresh_token);
+        const gmail = google.gmail({ version: 'v1', auth });
+        const profile = await gmail.users.getProfile({ userId: 'me' });
+        return {
+          content: [{
+            type: 'text',
+            text: `✅ Authorized! Now using Google account: ${profile.data.emailAddress}`,
+          }],
+        };
+      } catch {
+        return { content: [{ type: 'text', text: '✅ Token set for this session. (Could not verify account — will try on next tool call.)' }] };
+      }
+    }
+  );
 
   // ─── GMAIL ───────────────────────────────────────────────────────────────
 

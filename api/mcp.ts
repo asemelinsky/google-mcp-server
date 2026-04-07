@@ -2,14 +2,19 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from '../lib/mcp-server.js';
 
-const sessions = new Map<string, StreamableHTTPServerTransport>();
+interface SessionState {
+  transport: StreamableHTTPServerTransport;
+  getToken: () => string | undefined;
+  setToken: (token: string) => void;
+}
+
+const sessions = new Map<string, SessionState>();
 
 function authError(res: VercelResponse) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
 function validateBearer(req: VercelRequest): boolean {
-  // Accept token via Authorization header OR ?token= query param
   const auth = req.headers['authorization'] ?? '';
   if (auth === `Bearer ${process.env.MCP_SECRET_TOKEN}`) return true;
   const queryToken = req.query['token'] as string | undefined;
@@ -17,7 +22,6 @@ function validateBearer(req: VercelRequest): boolean {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS preflight
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
@@ -28,20 +32,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
   if (req.method === 'POST') {
-    let transport: StreamableHTTPServerTransport;
+    let state: SessionState;
 
     if (sessionId && sessions.has(sessionId)) {
-      transport = sessions.get(sessionId)!;
+      state = sessions.get(sessionId)!;
     } else {
-      transport = new StreamableHTTPServerTransport({
+      let sessionToken: string | undefined;
+      const getToken = () => sessionToken;
+      const setToken = (t: string) => { sessionToken = t; };
+
+      const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
-        onsessioninitialized: (id) => { sessions.set(id, transport); },
+        onsessioninitialized: (id) => { sessions.set(id, state); },
       });
-      const server = createMcpServer();
+
+      state = { transport, getToken, setToken };
+      const server = createMcpServer(getToken, setToken);
       await server.connect(transport);
     }
 
-    await transport.handleRequest(req, res, req.body);
+    await state.transport.handleRequest(req, res, req.body);
     return;
   }
 
@@ -50,8 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       res.status(400).json({ error: 'Missing or unknown session ID' });
       return;
     }
-    const transport = sessions.get(sessionId)!;
-    await transport.handleRequest(req, res);
+    await sessions.get(sessionId)!.transport.handleRequest(req, res);
     return;
   }
 

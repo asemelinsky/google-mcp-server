@@ -1,16 +1,15 @@
 import { google } from 'googleapis';
 
-export function createOAuth2Client() {
+export function createOAuth2Client(refreshToken?: string) {
   const client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID!,
     process.env.GOOGLE_CLIENT_SECRET!,
     'https://google-mcp-server-sigma.vercel.app/api/auth/callback'
   );
 
-  if (process.env.GOOGLE_REFRESH_TOKEN) {
-    client.setCredentials({
-      refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
-    });
+  const token = refreshToken ?? process.env.GOOGLE_REFRESH_TOKEN;
+  if (token) {
+    client.setCredentials({ refresh_token: token });
   }
 
   return client;
