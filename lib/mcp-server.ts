@@ -205,19 +205,14 @@ export function createMcpServer(): McpServer {
       fileId: z.string().describe('Google Drive file ID'),
     },
     async ({ fileId }) => {
-      const { drive, docs } = getClients();
+      const { drive } = getClients();
       // check mime type
       const meta = await drive.files.get({ fileId, fields: 'mimeType,name' });
       const mime = meta.data.mimeType ?? '';
 
       if (mime === 'application/vnd.google-apps.document') {
-        const doc = await docs.documents.get({ documentId: fileId });
-        const content = doc.data.body?.content ?? [];
-        const text = content
-          .flatMap((el) => el.paragraph?.elements ?? [])
-          .map((el) => el.textRun?.content ?? '')
-          .join('');
-        return { content: [{ type: 'text', text: `# ${meta.data.name}\n\n${text}` }] };
+        const res = await drive.files.export({ fileId, mimeType: 'text/markdown' }, { responseType: 'text' });
+        return { content: [{ type: 'text', text: `# ${meta.data.name}\n\n${String(res.data)}` }] };
       }
 
       // export as plain text for other Google formats

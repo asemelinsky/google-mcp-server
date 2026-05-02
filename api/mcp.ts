@@ -436,9 +436,8 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       const meta = await drive.files.get({ fileId: args.fileId as string, fields: 'mimeType,name' });
       const mime = meta.data.mimeType ?? '';
       if (mime === 'application/vnd.google-apps.document') {
-        const doc = await docs.documents.get({ documentId: args.fileId as string });
-        const text = (doc.data.body?.content ?? []).flatMap(el => el.paragraph?.elements ?? []).map(el => el.textRun?.content ?? '').join('');
-        return `# ${meta.data.name}\n\n${text}`;
+        const res = await drive.files.export({ fileId: args.fileId as string, mimeType: 'text/markdown' }, { responseType: 'text' });
+        return `# ${meta.data.name}\n\n${String(res.data)}`;
       }
       if (mime.startsWith('application/vnd.google-apps.')) {
         const res = await drive.files.export({ fileId: args.fileId as string, mimeType: 'text/plain' }, { responseType: 'text' });
