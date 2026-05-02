@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { google } from 'googleapis';
-import { createOAuth2Client, SCOPES } from '../lib/google-client.js';
+import { createOAuth2Client, SCOPES, type GoogleAccount } from '../lib/google-client.js';
 
 function validateBearer(req: VercelRequest): boolean {
   const auth = req.headers['authorization'] ?? '';
@@ -8,8 +8,8 @@ function validateBearer(req: VercelRequest): boolean {
   return (req.query['token'] as string | undefined) === process.env.MCP_SECRET_TOKEN;
 }
 
-function getClients() {
-  const auth = createOAuth2Client();
+function makeClients(account?: GoogleAccount) {
+  const auth = createOAuth2Client(account);
   return {
     gmail: google.gmail({ version: 'v1', auth }),
     drive: google.drive({ version: 'v3', auth }),
@@ -19,6 +19,15 @@ function getClients() {
     people: google.people({ version: 'v1', auth }),
   };
 }
+
+// Optional `account` parameter merged into every tool schema by tools/list response
+const ACCOUNT_PROP = {
+  account: {
+    type: 'string',
+    enum: ['personal', 'business'],
+    description: 'Google account: "personal"=a.semelinsky@gmail.com, "business"=o.semelinksy@j127group.com. If omitted, uses default (currently business).',
+  },
+} as const;
 
 const TOOLS = [
   // Auth
@@ -343,7 +352,8 @@ const encodeHeader = (s: string) =>
   /[^\x00-\x7F]/.test(s) ? `=?UTF-8?B?${Buffer.from(s, 'utf-8').toString('base64')}?=` : s;
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
-  const { gmail, drive, docs, sheets, calendar, people } = getClients();
+  const account = (args.account as GoogleAccount | undefined);
+  const { gmail, drive, docs, sheets, calendar, people } = makeClients(account);
 
   switch (name) {
     case 'get_auth_url': {
@@ -663,7 +673,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (method === 'tools/list') {
-      return res.json(jsonrpc(id, { tools: TOOLS }));
+      // Merge ACCOUNT_PROP into every tool's inputSchema.properties (so Claude can pass `account`)
+      const toolsWithAccount = TOOLS.map((t: any) => ({
+        ...t,
+        inputSchema: {
+          ...t.inputSchema,
+          properties: {
+            ...(t.inputSchema?.properties ?? {}),
+            ...ACCOUNT_PROP,
+          },
+        },
+      }));
+      return res.json(jsonrpc(id, { tools: toolsWithAccount }));
     }
 
     if (method === 'tools/call') {
