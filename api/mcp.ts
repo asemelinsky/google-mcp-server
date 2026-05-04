@@ -809,7 +809,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (method === 'tools/call') {
       const toolName = body.params?.name as string;
       const toolArgs = (body.params?.arguments ?? {}) as Record<string, unknown>;
-      const text = await callTool(toolName, toolArgs);
+
+      // Hard timeout to guarantee response within bounded time — prevents Claude Code tmux hangs
+      // when Google API stalls. If exceeded, JSON-RPC error returns instead of infinite wait.
+      const TOOL_TIMEOUT_MS = parseInt(process.env.MCP_TOOL_TIMEOUT_MS ?? '25000', 10);
+      const startedAt = Date.now();
+
+      const text = await Promise.race([
+        callTool(toolName, toolArgs),
+        new Promise<string>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Tool '${toolName}' exceeded ${TOOL_TIMEOUT_MS}ms timeout — call aborted to avoid client hang. Try again or check Google API status.`)),
+            TOOL_TIMEOUT_MS
+          )
+        ),
+      ]);
+
+      const duration = Date.now() - startedAt;
+      if (duration > 10000) {
+        console.warn(`SLOW-TOOL: '${toolName}' took ${duration}ms (acc=${(toolArgs.account as string) ?? 'business'})`);
+      }
+
       return res.json(jsonrpc(id, { content: [{ type: 'text', text }] }));
     }
 

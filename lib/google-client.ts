@@ -41,6 +41,12 @@ export function createOAuth2Client(accountOrToken?: GoogleAccount | string, expl
   return client;
 }
 
+// Per-request HTTP timeout for googleapis client (axios-based transporter under the hood).
+// Combined with per-tool Promise.race timeout in api/mcp.ts, guarantees bounded response time.
+// Set once at module-init; all subsequent google.X() calls inherit this timeout.
+const HTTP_TIMEOUT_MS = parseInt(process.env.MCP_GOOGLE_HTTP_TIMEOUT_MS ?? '20000', 10);
+google.options({ timeout: HTTP_TIMEOUT_MS });
+
 export const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/drive',
