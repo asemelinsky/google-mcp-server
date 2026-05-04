@@ -132,6 +132,7 @@ const TOOLS = [
         query: { type: 'string' },
         mimeType: { type: 'string' },
         maxResults: { type: 'number' },
+        ...ACCOUNT_PROP,
       },
     },
   },
@@ -141,7 +142,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       required: ['fileId'],
-      properties: { fileId: { type: 'string' } },
+      properties: { fileId: { type: 'string' }, ...ACCOUNT_PROP },
     },
   },
   {
@@ -149,7 +150,7 @@ const TOOLS = [
     description: 'List files in a Google Drive folder',
     inputSchema: {
       type: 'object',
-      properties: { folderId: { type: 'string', description: 'Folder ID (default: root)' } },
+      properties: { folderId: { type: 'string', description: 'Folder ID (default: root)' }, ...ACCOUNT_PROP },
     },
   },
   {
@@ -161,6 +162,7 @@ const TOOLS = [
       properties: {
         name: { type: 'string' },
         parentFolderId: { type: 'string', description: 'Parent folder ID (default: root)' },
+        ...ACCOUNT_PROP,
       },
     },
   },
@@ -174,6 +176,7 @@ const TOOLS = [
         fileId: { type: 'string' },
         email: { type: 'string' },
         role: { type: 'string', description: 'reader | commenter | writer (default: reader)' },
+        ...ACCOUNT_PROP,
       },
     },
   },
@@ -183,7 +186,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       required: ['fileId'],
-      properties: { fileId: { type: 'string' } },
+      properties: { fileId: { type: 'string' }, ...ACCOUNT_PROP },
     },
   },
 
