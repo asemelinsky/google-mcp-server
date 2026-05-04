@@ -20,12 +20,48 @@ function makeClients(account?: GoogleAccount) {
   };
 }
 
-// Optional `account` parameter merged into every tool schema by tools/list response
+// Optional `account` parameter merged into every tool schema (both at definition time and tools/list response)
 const ACCOUNT_PROP = {
   account: {
     type: 'string',
     enum: ['personal', 'business'],
     description: 'Google account: "personal"=a.semelinsky@gmail.com, "business"=o.semelinksy@j127group.com. If omitted, uses default (currently business).',
+  },
+} as const;
+
+// Reusable Reminder definition for Calendar event tools (mirrors stock Google Calendar MCP shape)
+const REMINDER_DEF = {
+  type: 'object',
+  required: ['method', 'minutes'],
+  properties: {
+    method: { type: 'string', enum: ['email', 'popup'], description: 'Reminder delivery method' },
+    minutes: { type: 'integer', description: 'Minutes before event to fire reminder' },
+  },
+} as const;
+
+// Common props shared by create_event/update_event — feature parity with stock Google Calendar create_event
+const EVENT_COMMON_PROPS = {
+  location: { type: 'string', description: 'Geographic location free-form text' },
+  calendarId: { type: 'string', description: 'Calendar ID (default: primary)' },
+  timeZone: { type: 'string', description: 'IANA TZ name (e.g. Europe/Kyiv). Used to resolve timezone-less dates.' },
+  overrideReminders: {
+    type: 'array',
+    items: REMINDER_DEF,
+    description: 'Reminders {method, minutes} overriding calendar default. If set — useDefault becomes false.',
+  },
+  addGoogleMeetUrl: { type: 'boolean', description: 'Generate a Google Meet URL for this event' },
+  allDay: { type: 'boolean', description: 'All-day event. start/end must be YYYY-MM-DD if true.' },
+  colorId: { type: 'string', description: '1-11 — Lavender, Sage, Grape, Flamingo, Banana, Tangerine, Peacock, Graphite, Blueberry, Basil, Tomato' },
+  recurrenceData: {
+    type: 'array',
+    items: { type: 'string' },
+    description: 'RRULE/RDATE/EXDATE per RFC 5545. e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"]',
+  },
+  visibility: { type: 'string', enum: ['default', 'public', 'private'] },
+  notificationLevel: {
+    type: 'string',
+    enum: ['NONE', 'EXTERNAL_ONLY', 'ALL'],
+    description: 'Email notifications to attendees on create/update',
   },
 } as const;
 
@@ -282,33 +318,34 @@ const TOOLS = [
   },
   {
     name: 'create_event',
-    description: 'Create a Google Calendar event',
+    description: 'Create a Google Calendar event with full feature parity to stock Google Calendar MCP — supports location, timeZone, overrideReminders, recurrence, all-day, Google Meet URL, etc.',
     inputSchema: {
       type: 'object',
       required: ['summary', 'start', 'end'],
       properties: {
-        summary: { type: 'string' },
-        start: { type: 'string', description: 'ISO 8601 datetime' },
-        end: { type: 'string', description: 'ISO 8601 datetime' },
-        description: { type: 'string' },
-        attendees: { type: 'array', items: { type: 'string' }, description: 'List of email addresses' },
+        summary: { type: 'string', description: 'Event title' },
+        start: { type: 'string', description: 'ISO 8601 datetime, OR YYYY-MM-DD if allDay=true' },
+        end: { type: 'string', description: 'ISO 8601 datetime, OR YYYY-MM-DD if allDay=true' },
+        description: { type: 'string', description: 'Event description (HTML allowed)' },
+        attendees: { type: 'array', items: { type: 'string' }, description: 'Attendee email addresses' },
+        ...EVENT_COMMON_PROPS,
       },
     },
   },
   {
     name: 'update_event',
-    description: 'Update a Google Calendar event',
+    description: 'Update a Google Calendar event. All fields optional except eventId — only provided fields are changed.',
     inputSchema: {
       type: 'object',
       required: ['eventId'],
       properties: {
-        eventId: { type: 'string' },
-        calendarId: { type: 'string' },
+        eventId: { type: 'string', description: 'Event ID to update' },
         summary: { type: 'string' },
-        start: { type: 'string' },
-        end: { type: 'string' },
+        start: { type: 'string', description: 'ISO 8601 datetime or YYYY-MM-DD' },
+        end: { type: 'string', description: 'ISO 8601 datetime or YYYY-MM-DD' },
         description: { type: 'string' },
         attendees: { type: 'array', items: { type: 'string' } },
+        ...EVENT_COMMON_PROPS,
       },
     },
   },
@@ -350,6 +387,17 @@ const TOOLS = [
     },
   },
 ];
+
+// Defensive: inject ACCOUNT_PROP into every tool schema at module init.
+// Some MCP clients (e.g. Claude Code) cache tool schemas at first connect and don't re-fetch tools/list,
+// so dynamic merge in the tools/list handler isn't enough — schema must be explicit at definition time.
+for (const t of TOOLS as Array<{ inputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] } }>) {
+  if (!t.inputSchema) t.inputSchema = { type: 'object', properties: {} };
+  if (!t.inputSchema.properties) t.inputSchema.properties = {};
+  if (!('account' in t.inputSchema.properties)) {
+    Object.assign(t.inputSchema.properties, ACCOUNT_PROP);
+  }
+}
 
 const encodeHeader = (s: string) =>
   /[^\x00-\x7F]/.test(s) ? `=?UTF-8?B?${Buffer.from(s, 'utf-8').toString('base64')}?=` : s;
@@ -462,7 +510,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 
     case 'list_folder': {
       const parent = (args.folderId as string) ?? 'root';
-      const all: Array<{ id?: string; name?: string; mimeType?: string }> = [];
+      const all: Array<{ id?: string | null; name?: string | null; mimeType?: string | null }> = [];
       let pageToken: string | undefined;
       // Paginate through all pages — Drive caps at 1000 per page; loop until exhausted
       do {
@@ -579,32 +627,88 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
     }
 
     case 'create_event': {
+      const allDay = (args.allDay as boolean) === true;
+      const tz = args.timeZone as string | undefined;
+      const start = allDay
+        ? { date: args.start as string }
+        : { dateTime: args.start as string, ...(tz ? { timeZone: tz } : {}) };
+      const end = allDay
+        ? { date: args.end as string }
+        : { dateTime: args.end as string, ...(tz ? { timeZone: tz } : {}) };
+
+      const overrideReminders = args.overrideReminders as Array<{ method: string; minutes: number }> | undefined;
+
+      const requestBody: Record<string, unknown> = {
+        summary: args.summary as string,
+        description: args.description as string | undefined,
+        location: args.location as string | undefined,
+        start,
+        end,
+        attendees: (args.attendees as string[] | undefined)?.map(email => ({ email })),
+        colorId: args.colorId as string | undefined,
+        visibility: args.visibility as string | undefined,
+        recurrence: args.recurrenceData as string[] | undefined,
+        ...(overrideReminders ? { reminders: { useDefault: false, overrides: overrideReminders } } : {}),
+        ...((args.addGoogleMeetUrl as boolean) === true
+          ? { conferenceData: { createRequest: { requestId: `meet-${Date.now()}`, conferenceSolutionKey: { type: 'hangoutsMeet' } } } }
+          : {}),
+      };
+
+      const sendUpdates = ((args.notificationLevel as string | undefined) === 'ALL') ? 'all'
+        : ((args.notificationLevel as string | undefined) === 'EXTERNAL_ONLY') ? 'externalOnly'
+        : 'none';
+
       const res = await calendar.events.insert({
-        calendarId: 'primary',
-        requestBody: {
-          summary: args.summary as string,
-          description: args.description as string,
-          start: { dateTime: args.start as string },
-          end: { dateTime: args.end as string },
-          attendees: (args.attendees as string[] | undefined)?.map(email => ({ email })),
-        },
+        calendarId: (args.calendarId as string) ?? 'primary',
+        sendUpdates,
+        ...((args.addGoogleMeetUrl as boolean) === true ? { conferenceDataVersion: 1 } : {}),
+        requestBody,
       });
       return `Event created: ${res.data.htmlLink}`;
     }
 
     case 'update_event': {
-      const existing = await calendar.events.get({ calendarId: (args.calendarId as string) ?? 'primary', eventId: args.eventId as string });
+      const calId = (args.calendarId as string) ?? 'primary';
+      const existing = await calendar.events.get({ calendarId: calId, eventId: args.eventId as string });
       const e = existing.data;
+
+      const allDay = (args.allDay as boolean) === true;
+      const tz = args.timeZone as string | undefined;
+      const start = args.start
+        ? (allDay
+            ? { date: args.start as string }
+            : { dateTime: args.start as string, ...(tz ? { timeZone: tz } : {}) })
+        : e.start;
+      const end = args.end
+        ? (allDay
+            ? { date: args.end as string }
+            : { dateTime: args.end as string, ...(tz ? { timeZone: tz } : {}) })
+        : e.end;
+
+      const overrideReminders = args.overrideReminders as Array<{ method: string; minutes: number }> | undefined;
+
+      const requestBody: Record<string, unknown> = {
+        summary: (args.summary as string) ?? e.summary,
+        description: (args.description as string) ?? e.description,
+        location: (args.location as string) ?? e.location,
+        start,
+        end,
+        attendees: args.attendees ? (args.attendees as string[]).map(email => ({ email })) : e.attendees,
+        colorId: (args.colorId as string) ?? e.colorId,
+        visibility: (args.visibility as string) ?? e.visibility,
+        recurrence: (args.recurrenceData as string[] | undefined) ?? e.recurrence,
+        ...(overrideReminders ? { reminders: { useDefault: false, overrides: overrideReminders } } : {}),
+      };
+
+      const sendUpdates = ((args.notificationLevel as string | undefined) === 'ALL') ? 'all'
+        : ((args.notificationLevel as string | undefined) === 'EXTERNAL_ONLY') ? 'externalOnly'
+        : 'none';
+
       const res = await calendar.events.update({
-        calendarId: (args.calendarId as string) ?? 'primary',
+        calendarId: calId,
         eventId: args.eventId as string,
-        requestBody: {
-          summary: (args.summary as string) ?? e.summary,
-          description: (args.description as string) ?? e.description,
-          start: args.start ? { dateTime: args.start as string } : e.start,
-          end: args.end ? { dateTime: args.end as string } : e.end,
-          attendees: args.attendees ? (args.attendees as string[]).map(email => ({ email })) : e.attendees,
-        },
+        sendUpdates,
+        requestBody,
       });
       return `Event updated: ${res.data.htmlLink}`;
     }
