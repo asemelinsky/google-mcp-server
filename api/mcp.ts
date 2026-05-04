@@ -462,10 +462,22 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 
     case 'list_folder': {
       const parent = (args.folderId as string) ?? 'root';
-      const res = await drive.files.list({ q: `'${parent}' in parents and trashed=false`, fields: 'files(id,name,mimeType)', pageSize: 50 });
-      const files = res.data.files ?? [];
-      if (!files.length) return 'Folder is empty.';
-      return files.map(f => `${f.mimeType?.includes('folder') ? '📁' : '📄'} ${f.name}  (${f.id})`).join('\n');
+      const all: Array<{ id?: string; name?: string; mimeType?: string }> = [];
+      let pageToken: string | undefined;
+      // Paginate through all pages — Drive caps at 1000 per page; loop until exhausted
+      do {
+        const res = await drive.files.list({
+          q: `'${parent}' in parents and trashed=false`,
+          fields: 'nextPageToken, files(id,name,mimeType)',
+          pageSize: 1000,
+          pageToken,
+        });
+        all.push(...(res.data.files ?? []));
+        pageToken = res.data.nextPageToken ?? undefined;
+      } while (pageToken);
+      if (!all.length) return 'Folder is empty.';
+      const header = `Total: ${all.length} item(s)\n`;
+      return header + all.map(f => `${f.mimeType?.includes('folder') ? '📁' : '📄'} ${f.name}  (${f.id})`).join('\n');
     }
 
     case 'create_folder': {
