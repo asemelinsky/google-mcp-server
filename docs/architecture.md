@@ -1,14 +1,14 @@
-# Google MCP Server — Architecture & Reference
+# Productivity MCP Server — Architecture & Reference
 
-**Дата актуалізації:** 2026-05-04
-**Поточна версія:** master HEAD (26 commits since init)
-**Production URL:** https://google-mcp-server-sigma.vercel.app/api/mcp
+**Дата актуалізації:** 2026-05-11
+**Поточна версія:** 2.0.0 (Notion added)
+**Production URL:** https://google-mcp-server-sigma.vercel.app/api/mcp (Vercel project URL preserved — folder/repo renamed but URL stable to avoid breaking Claude.ai connector)
 
-Custom MCP server який ходить у Google Workspace від імені користувача (Gmail, Drive, Docs, Sheets, Calendar, Contacts) з підтримкою двох акаунтів (`personal` / `business`). Реалізовано як Vercel serverless functions (TypeScript). Stateless — кожен виклик незалежний.
+Custom MCP server який ходить у **Google Workspace** (Gmail, Drive, Docs, Sheets, Calendar, Contacts) і **Notion** від імені користувача з підтримкою двох акаунтів/workspace-ів (`personal` / `business`). ClickUp planned next. Реалізовано як Vercel serverless functions (TypeScript). Stateless — кожен виклик незалежний. HTTP-based (не stdio) — обходить CC 2.1.126 hangs стокових MCP на write операціях.
 
 ---
 
-## Tools (27 total)
+## Tools (41 total)
 
 ### Gmail (8)
 - `get_profile`, `search_emails`, `read_email`, `list_threads`
@@ -32,15 +32,30 @@ Custom MCP server який ходить у Google Workspace від імені к
 ### Auth (1)
 - `get_auth_url` — OAuth flow для додавання нового акаунта
 
+### Notion (14) — з 2026-05-11
+- Pages: `notion_search`, `notion_fetch_page`, `notion_create_page`, `notion_update_page`
+- Blocks: `notion_get_block_children`, `notion_append_blocks`, `notion_update_block`, `notion_delete_block`
+- Databases: `notion_query_database`, `notion_create_database`, `notion_update_database`
+- Comments: `notion_get_comments`, `notion_create_comment`
+- Users: `notion_get_users`
+
 ---
 
 ## Multi-account support (з 2026-05-02)
 
 Кожен tool приймає optional `account: "personal" | "business"` параметр.
 
-- `account="personal"` → токен `GOOGLE_REFRESH_TOKEN_PERSONAL` (`a.semelinsky@gmail.com`)
-- `account="business"` → токен `GOOGLE_REFRESH_TOKEN_BUSINESS` (`o.semelinksy@j127group.com`)
+**Google tools:**
+- `account="personal"` → `GOOGLE_REFRESH_TOKEN_PERSONAL` (`a.semelinsky@gmail.com`)
+- `account="business"` → `GOOGLE_REFRESH_TOKEN_BUSINESS` (`o.semelinksy@j127group.com`)
 - omitted → fallback `GOOGLE_REFRESH_TOKEN` (legacy = business)
+
+**Notion tools** (з 2026-05-11):
+- `account="personal"` → `NOTION_TOKEN_PERSONAL` (особистий Notion workspace) — **default**
+- `account="business"` → `NOTION_TOKEN_BUSINESS` (J127 Notion workspace, optional)
+- omitted → personal (primary usage)
+
+Default-asymmetry between Google (business) і Notion (personal) — свідома: відображає primary usage patterns. Той самий `account` enum, різні defaults у resolvers.
 
 **Важливо:** з 2026-05-04 `account` додається у схему **кожного** tool на module-init time (`api/mcp.ts:359`). Це defensive fix для MCP-клієнтів, що кешують схеми з tools/list і не оновлюють динамічний merge у відповіді.
 
@@ -158,7 +173,8 @@ if (duration > 10000) {
 | Env var | Default | Опис |
 |---|---|---|
 | `MCP_TOOL_TIMEOUT_MS` | 25000 | Per-tool maximum (Layer 1) |
-| `MCP_GOOGLE_HTTP_TIMEOUT_MS` | 20000 | Per-HTTP-request maximum (Layer 2) |
+| `MCP_GOOGLE_HTTP_TIMEOUT_MS` | 20000 | Per-HTTP-request maximum (Layer 2, Google) |
+| `MCP_NOTION_HTTP_TIMEOUT_MS` | 20000 | Per-HTTP-request maximum (Layer 2, Notion) |
 
 Збільшувати якщо легально-довгі tool calls (e.g. `read_spreadsheet` на величезному Sheet) починають таймаутити часто.
 
@@ -226,23 +242,26 @@ https://google-mcp-server-sigma.vercel.app/api/mcp?token=<MCP_SECRET_TOKEN>
 ## Файлова структура repo
 
 ```
-google-mcp-server/
+productivity-mcp-server/
 ├── api/
-│   ├── mcp.ts              ← 27 tools schema + handlers (~830 lines)
+│   ├── mcp.ts              ← 41 tools schema + handlers (~1200 lines)
 │   ├── auth/
-│   │   ├── google.ts       ← OAuth start
+│   │   ├── google.ts       ← OAuth start (Google only)
 │   │   └── callback.ts     ← OAuth callback (returns refresh_token)
 ├── lib/
 │   ├── google-client.ts    ← OAuth2 + multi-account resolver + HTTP timeout
+│   ├── notion-client.ts    ← fetch wrapper + multi-account resolver + pagination
 │   └── mcp-server.ts       ← (legacy SDK helpers, не використовується у statless mode)
 ├── docs/
 │   ├── architecture.md     ← цей файл
 │   └── progress.md         ← initial setup notes (2026-04-07)
 ├── README.md               ← short setup guide
-├── package.json
+├── package.json            ← name=productivity-mcp-server, version=2.0.0
 ├── tsconfig.json
 └── vercel.json             ← Vercel function config (maxDuration, CORS)
 ```
+
+**Notion auth:** Internal Integration Token (per workspace), створюється user-ом у https://notion.so/my-integrations, потім integration треба connect-ити до кожної top-level page у Connections menu. Немає OAuth flow в сервері — токен потрапляє у Vercel env вручну.
 
 ---
 

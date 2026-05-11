@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { google } from 'googleapis';
 import { createOAuth2Client, SCOPES, type GoogleAccount } from '../lib/google-client.js';
+import { notionFetch, notionPaginate, type NotionAccount } from '../lib/notion-client.js';
 
 function validateBearer(req: VercelRequest): boolean {
   const auth = req.headers['authorization'] ?? '';
@@ -25,7 +26,7 @@ const ACCOUNT_PROP = {
   account: {
     type: 'string',
     enum: ['personal', 'business'],
-    description: 'Google account: "personal"=a.semelinsky@gmail.com, "business"=o.semelinksy@j127group.com. If omitted, uses default (currently business).',
+    description: 'Account/workspace selector. "personal" = a.semelinsky@gmail.com (Google) or personal Notion workspace. "business" = o.semelinksy@j127group.com (Google) or J127 Notion workspace. Defaults: business for Google tools, personal for Notion tools.',
   },
 } as const;
 
@@ -386,6 +387,190 @@ const TOOLS = [
       },
     },
   },
+
+  // Notion (14)
+  {
+    name: 'notion_search',
+    description: 'Search Notion pages and databases by title (full-text). Returns items the integration has access to.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Text to match in titles. Empty string returns all accessible items.' },
+        filterType: { type: 'string', enum: ['page', 'database'], description: 'Optionally restrict to one type.' },
+        sortLastEditedDesc: { type: 'boolean', description: 'Sort by last edited desc. Default true.' },
+        maxResults: { type: 'number', description: 'Max items to return (default 50)' },
+      },
+    },
+  },
+  {
+    name: 'notion_fetch_page',
+    description: 'Fetch full content of a Notion page including all child blocks (recursively expanded).',
+    inputSchema: {
+      type: 'object',
+      required: ['pageId'],
+      properties: {
+        pageId: { type: 'string', description: 'Notion page ID (with or without dashes)' },
+        includeBlocks: { type: 'boolean', description: 'Include child blocks content. Default true.' },
+        maxDepth: { type: 'number', description: 'Max recursion depth for child blocks. Default 3.' },
+      },
+    },
+  },
+  {
+    name: 'notion_create_page',
+    description: 'Create a new Notion page under a parent (page_id, database_id, or workspace root).',
+    inputSchema: {
+      type: 'object',
+      required: ['parent'],
+      properties: {
+        parent: { type: 'object', description: 'Parent: {type:"page_id", page_id:"..."} or {type:"database_id", database_id:"..."} or {type:"workspace", workspace:true}' },
+        properties: { type: 'object', description: 'For DB children — must match DB schema. For page children — at minimum {title:[{text:{content:"..."}}]}.' },
+        children: { type: 'array', description: 'Block objects as initial content. e.g. [{type:"paragraph", paragraph:{rich_text:[{text:{content:"hello"}}]}}]' },
+        icon: { type: 'object', description: 'e.g. {type:"emoji", emoji:"📝"}' },
+        cover: { type: 'object', description: 'e.g. {type:"external", external:{url:"https://..."}}' },
+      },
+    },
+  },
+  {
+    name: 'notion_update_page',
+    description: 'Update Notion page properties, icon, cover, or archive status.',
+    inputSchema: {
+      type: 'object',
+      required: ['pageId'],
+      properties: {
+        pageId: { type: 'string' },
+        properties: { type: 'object', description: 'Properties to update (must match DB schema if page is a DB row)' },
+        icon: { type: 'object' },
+        cover: { type: 'object' },
+        archived: { type: 'boolean', description: 'Set true to archive (soft delete)' },
+      },
+    },
+  },
+  {
+    name: 'notion_get_block_children',
+    description: 'List immediate child blocks of a page or block.',
+    inputSchema: {
+      type: 'object',
+      required: ['blockId'],
+      properties: {
+        blockId: { type: 'string', description: 'Page ID or block ID' },
+        maxResults: { type: 'number', description: 'Max blocks (default 100)' },
+      },
+    },
+  },
+  {
+    name: 'notion_append_blocks',
+    description: 'Append blocks to the end of a page or block. Max 100 blocks per call.',
+    inputSchema: {
+      type: 'object',
+      required: ['blockId', 'children'],
+      properties: {
+        blockId: { type: 'string', description: 'Target page ID or block ID' },
+        children: { type: 'array', description: 'Array of block objects to append' },
+        after: { type: 'string', description: 'Optional: append after specific existing block ID' },
+      },
+    },
+  },
+  {
+    name: 'notion_update_block',
+    description: 'Update content of an existing block.',
+    inputSchema: {
+      type: 'object',
+      required: ['blockId', 'block'],
+      properties: {
+        blockId: { type: 'string' },
+        block: { type: 'object', description: 'Block payload, e.g. {paragraph:{rich_text:[{text:{content:"new"}}]}}' },
+      },
+    },
+  },
+  {
+    name: 'notion_delete_block',
+    description: 'Delete (move to trash) a block. For whole pages, use notion_update_page with archived=true.',
+    inputSchema: {
+      type: 'object',
+      required: ['blockId'],
+      properties: {
+        blockId: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'notion_query_database',
+    description: 'Query a Notion database with filter/sort. Returns matching pages (DB rows).',
+    inputSchema: {
+      type: 'object',
+      required: ['databaseId'],
+      properties: {
+        databaseId: { type: 'string' },
+        filter: { type: 'object', description: 'Notion filter object, e.g. {property:"Status", select:{equals:"Done"}}' },
+        sorts: { type: 'array', description: 'Sort spec, e.g. [{property:"Created", direction:"descending"}]' },
+        maxResults: { type: 'number', description: 'Max rows (default 100)' },
+      },
+    },
+  },
+  {
+    name: 'notion_create_database',
+    description: 'Create a new database under a parent page.',
+    inputSchema: {
+      type: 'object',
+      required: ['parent', 'title', 'properties'],
+      properties: {
+        parent: { type: 'object', description: '{type:"page_id", page_id:"..."}' },
+        title: { type: 'array', description: 'Title rich_text array, e.g. [{type:"text", text:{content:"Tasks"}}]' },
+        properties: { type: 'object', description: 'Schema, e.g. {Name:{title:{}}, Status:{select:{options:[{name:"Todo"},{name:"Done"}]}}}' },
+        icon: { type: 'object' },
+        isInline: { type: 'boolean', description: 'Default false (full-page DB). True for inline DB.' },
+      },
+    },
+  },
+  {
+    name: 'notion_update_database',
+    description: 'Update database title, description, or property schema.',
+    inputSchema: {
+      type: 'object',
+      required: ['databaseId'],
+      properties: {
+        databaseId: { type: 'string' },
+        title: { type: 'array' },
+        description: { type: 'array' },
+        properties: { type: 'object', description: 'Property schema patch — add/rename/remove fields' },
+      },
+    },
+  },
+  {
+    name: 'notion_get_comments',
+    description: 'List comments attached to a page or block.',
+    inputSchema: {
+      type: 'object',
+      required: ['blockId'],
+      properties: {
+        blockId: { type: 'string', description: 'Page ID or block ID' },
+        maxResults: { type: 'number', description: 'Default 100' },
+      },
+    },
+  },
+  {
+    name: 'notion_create_comment',
+    description: 'Create a comment on a page or reply in an existing discussion thread.',
+    inputSchema: {
+      type: 'object',
+      required: ['richText'],
+      properties: {
+        parent: { type: 'object', description: '{page_id:"..."} for top-level comment on page. Use either parent OR discussionId.' },
+        discussionId: { type: 'string', description: 'Use to reply in existing thread (instead of parent)' },
+        richText: { type: 'array', description: 'Rich text array, e.g. [{type:"text", text:{content:"hello"}}]' },
+      },
+    },
+  },
+  {
+    name: 'notion_get_users',
+    description: 'List users in the Notion workspace (bots + members).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxResults: { type: 'number', description: 'Default 50' },
+      },
+    },
+  },
 ];
 
 // Defensive: inject ACCOUNT_PROP into every tool schema at module init.
@@ -401,6 +586,91 @@ for (const t of TOOLS as Array<{ inputSchema?: { type?: string; properties?: Rec
 
 const encodeHeader = (s: string) =>
   /[^\x00-\x7F]/.test(s) ? `=?UTF-8?B?${Buffer.from(s, 'utf-8').toString('base64')}?=` : s;
+
+// ---------- Notion helpers ----------
+
+function extractNotionTitle(obj: any): string {
+  // Pages: find property of type "title"; databases: top-level title array; blocks: best-effort.
+  if (obj.object === 'database' && Array.isArray(obj.title)) {
+    return obj.title.map((rt: any) => rt.plain_text ?? '').join('') || '(untitled)';
+  }
+  const props = obj.properties ?? {};
+  for (const v of Object.values(props) as any[]) {
+    if (v?.type === 'title' && Array.isArray(v.title)) {
+      return v.title.map((rt: any) => rt.plain_text ?? '').join('') || '(untitled)';
+    }
+  }
+  return '(untitled)';
+}
+
+function stringifyNotionProperty(p: any): string {
+  if (!p) return '';
+  switch (p.type) {
+    case 'title':
+    case 'rich_text':
+      return (p[p.type] ?? []).map((rt: any) => rt.plain_text ?? '').join('');
+    case 'number': return String(p.number ?? '');
+    case 'select': return p.select?.name ?? '';
+    case 'multi_select': return (p.multi_select ?? []).map((s: any) => s.name).join(', ');
+    case 'status': return p.status?.name ?? '';
+    case 'date': {
+      const d = p.date;
+      if (!d) return '';
+      return d.end ? `${d.start} → ${d.end}` : d.start;
+    }
+    case 'checkbox': return p.checkbox ? '✓' : '✗';
+    case 'url': return p.url ?? '';
+    case 'email': return p.email ?? '';
+    case 'phone_number': return p.phone_number ?? '';
+    case 'people': return (p.people ?? []).map((u: any) => u.name ?? u.id).join(', ');
+    case 'files': return (p.files ?? []).map((f: any) => f.name).join(', ');
+    case 'relation': return (p.relation ?? []).map((r: any) => r.id).join(', ');
+    case 'formula': return stringifyNotionProperty({ type: p.formula?.type, [p.formula?.type]: p.formula?.[p.formula?.type] });
+    case 'rollup': return JSON.stringify(p.rollup);
+    case 'created_time': return p.created_time;
+    case 'last_edited_time': return p.last_edited_time;
+    case 'created_by': return p.created_by?.id ?? '';
+    case 'last_edited_by': return p.last_edited_by?.id ?? '';
+    case 'unique_id': return `${p.unique_id?.prefix ?? ''}${p.unique_id?.number ?? ''}`;
+    default: return `[${p.type}]`;
+  }
+}
+
+function stringifyBlockSummary(b: any): string {
+  const t = b.type;
+  const data = b[t];
+  if (!data) return `<empty ${t}>`;
+  if (Array.isArray(data.rich_text)) {
+    return data.rich_text.map((rt: any) => rt.plain_text ?? '').join('').slice(0, 200);
+  }
+  if (data.url) return data.url;
+  if (data.title) return data.title;
+  return `<${t}>`;
+}
+
+async function fetchBlocksRecursive(blockId: string, account: NotionAccount | undefined, maxDepth: number, depth: number): Promise<string> {
+  if (depth >= maxDepth) return '  '.repeat(depth) + '… (max depth reached)';
+  const blocks: any[] = await notionPaginate('GET', `/blocks/${blockId}/children?page_size=100`, account, undefined, 5);
+  const lines: string[] = [];
+  for (const b of blocks) {
+    const indent = '  '.repeat(depth);
+    const prefix = b.type === 'heading_1' ? '# '
+      : b.type === 'heading_2' ? '## '
+      : b.type === 'heading_3' ? '### '
+      : b.type === 'bulleted_list_item' ? '- '
+      : b.type === 'numbered_list_item' ? '1. '
+      : b.type === 'to_do' ? (b.to_do?.checked ? '[x] ' : '[ ] ')
+      : b.type === 'quote' ? '> '
+      : b.type === 'code' ? '```\n' + (b.code?.language ?? '') + '\n'
+      : '';
+    const summary = stringifyBlockSummary(b);
+    lines.push(`${indent}${prefix}${summary}${b.type === 'code' ? '\n```' : ''}`);
+    if (b.has_children) {
+      lines.push(await fetchBlocksRecursive(b.id, account, maxDepth, depth + 1));
+    }
+  }
+  return lines.join('\n');
+}
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
   const account = (args.account as GoogleAccount | undefined);
@@ -756,6 +1026,174 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
       }).join('\n---\n');
     }
 
+    // ---------- Notion ----------
+
+    case 'notion_search': {
+      const body: any = {};
+      if (args.query !== undefined) body.query = args.query;
+      if (args.filterType) body.filter = { property: 'object', value: args.filterType };
+      if (args.sortLastEditedDesc !== false) body.sort = { direction: 'descending', timestamp: 'last_edited_time' };
+      const maxResults = (args.maxResults as number) ?? 50;
+      body.page_size = Math.min(100, maxResults);
+      const results = await notionPaginate('POST', '/search', account as NotionAccount | undefined, body, Math.ceil(maxResults / 100));
+      const trimmed = results.slice(0, maxResults);
+      if (!trimmed.length) return 'No Notion pages/databases found.';
+      return trimmed.map((r: any) => {
+        const title = extractNotionTitle(r);
+        return `[${r.object}] ${title}\n  id: ${r.id}\n  url: ${r.url}\n  last_edited: ${r.last_edited_time}`;
+      }).join('\n---\n');
+    }
+
+    case 'notion_fetch_page': {
+      const pageId = args.pageId as string;
+      const page: any = await notionFetch('GET', `/pages/${pageId}`, account as NotionAccount | undefined);
+      const lines = [
+        `PAGE ${pageId}`,
+        `Title: ${extractNotionTitle(page)}`,
+        `URL: ${page.url}`,
+        `Created: ${page.created_time}`,
+        `Last edited: ${page.last_edited_time}`,
+        `Archived: ${page.archived}`,
+      ];
+      if (Object.keys(page.properties ?? {}).length) {
+        lines.push('', 'Properties:');
+        for (const [k, v] of Object.entries(page.properties as any)) {
+          lines.push(`  ${k}: ${stringifyNotionProperty(v as any)}`);
+        }
+      }
+      if (args.includeBlocks !== false) {
+        lines.push('', 'Content:');
+        const maxDepth = (args.maxDepth as number) ?? 3;
+        const text = await fetchBlocksRecursive(pageId, account as NotionAccount | undefined, maxDepth, 0);
+        lines.push(text);
+      }
+      return lines.join('\n');
+    }
+
+    case 'notion_create_page': {
+      const body: any = { parent: args.parent };
+      if (args.properties) body.properties = args.properties;
+      if (args.children) body.children = args.children;
+      if (args.icon) body.icon = args.icon;
+      if (args.cover) body.cover = args.cover;
+      const res: any = await notionFetch('POST', '/pages', account as NotionAccount | undefined, body);
+      return `Created page ${res.id}\nURL: ${res.url}\nTitle: ${extractNotionTitle(res)}`;
+    }
+
+    case 'notion_update_page': {
+      const pageId = args.pageId as string;
+      const body: any = {};
+      if (args.properties) body.properties = args.properties;
+      if (args.icon) body.icon = args.icon;
+      if (args.cover) body.cover = args.cover;
+      if (args.archived !== undefined) body.archived = args.archived;
+      const res: any = await notionFetch('PATCH', `/pages/${pageId}`, account as NotionAccount | undefined, body);
+      return `Updated page ${res.id}\nURL: ${res.url}\nArchived: ${res.archived}`;
+    }
+
+    case 'notion_get_block_children': {
+      const blockId = args.blockId as string;
+      const maxResults = (args.maxResults as number) ?? 100;
+      const path = `/blocks/${blockId}/children?page_size=${Math.min(100, maxResults)}`;
+      const results = await notionPaginate('GET', path, account as NotionAccount | undefined, undefined, Math.ceil(maxResults / 100));
+      const trimmed = results.slice(0, maxResults);
+      if (!trimmed.length) return 'No child blocks.';
+      return trimmed.map((b: any) => `[${b.type}] ${b.id}\n  ${stringifyBlockSummary(b)}`).join('\n---\n');
+    }
+
+    case 'notion_append_blocks': {
+      const blockId = args.blockId as string;
+      const body: any = { children: args.children };
+      if (args.after) body.after = args.after;
+      const res: any = await notionFetch('PATCH', `/blocks/${blockId}/children`, account as NotionAccount | undefined, body);
+      return `Appended ${(res.results ?? []).length} block(s) to ${blockId}`;
+    }
+
+    case 'notion_update_block': {
+      const blockId = args.blockId as string;
+      const res: any = await notionFetch('PATCH', `/blocks/${blockId}`, account as NotionAccount | undefined, args.block);
+      return `Updated block ${res.id} (${res.type})`;
+    }
+
+    case 'notion_delete_block': {
+      const blockId = args.blockId as string;
+      const res: any = await notionFetch('DELETE', `/blocks/${blockId}`, account as NotionAccount | undefined);
+      return `Deleted block ${res.id ?? blockId}`;
+    }
+
+    case 'notion_query_database': {
+      const databaseId = args.databaseId as string;
+      const body: any = {};
+      if (args.filter) body.filter = args.filter;
+      if (args.sorts) body.sorts = args.sorts;
+      const maxResults = (args.maxResults as number) ?? 100;
+      body.page_size = Math.min(100, maxResults);
+      const results = await notionPaginate('POST', `/databases/${databaseId}/query`, account as NotionAccount | undefined, body, Math.ceil(maxResults / 100));
+      const trimmed = results.slice(0, maxResults);
+      if (!trimmed.length) return 'No rows match.';
+      return trimmed.map((p: any) => {
+        const props = Object.entries(p.properties ?? {})
+          .map(([k, v]: [string, any]) => `  ${k}: ${stringifyNotionProperty(v)}`)
+          .join('\n');
+        return `id: ${p.id}\nurl: ${p.url}\n${props}`;
+      }).join('\n---\n');
+    }
+
+    case 'notion_create_database': {
+      const body: any = {
+        parent: args.parent,
+        title: args.title,
+        properties: args.properties,
+      };
+      if (args.icon) body.icon = args.icon;
+      if (args.isInline !== undefined) body.is_inline = args.isInline;
+      const res: any = await notionFetch('POST', '/databases', account as NotionAccount | undefined, body);
+      return `Created database ${res.id}\nURL: ${res.url}`;
+    }
+
+    case 'notion_update_database': {
+      const databaseId = args.databaseId as string;
+      const body: any = {};
+      if (args.title) body.title = args.title;
+      if (args.description) body.description = args.description;
+      if (args.properties) body.properties = args.properties;
+      const res: any = await notionFetch('PATCH', `/databases/${databaseId}`, account as NotionAccount | undefined, body);
+      return `Updated database ${res.id}`;
+    }
+
+    case 'notion_get_comments': {
+      const blockId = args.blockId as string;
+      const maxResults = (args.maxResults as number) ?? 100;
+      const path = `/comments?block_id=${blockId}&page_size=${Math.min(100, maxResults)}`;
+      const results = await notionPaginate('GET', path, account as NotionAccount | undefined, undefined, Math.ceil(maxResults / 100));
+      const trimmed = results.slice(0, maxResults);
+      if (!trimmed.length) return 'No comments.';
+      return trimmed.map((c: any) => {
+        const text = (c.rich_text ?? []).map((rt: any) => rt.plain_text ?? '').join('');
+        return `id: ${c.id}\ncreated: ${c.created_time}\nby: ${c.created_by?.id ?? '?'}\ntext: ${text}`;
+      }).join('\n---\n');
+    }
+
+    case 'notion_create_comment': {
+      const body: any = { rich_text: args.richText };
+      if (args.parent) body.parent = args.parent;
+      if (args.discussionId) body.discussion_id = args.discussionId;
+      const res: any = await notionFetch('POST', '/comments', account as NotionAccount | undefined, body);
+      return `Created comment ${res.id}`;
+    }
+
+    case 'notion_get_users': {
+      const maxResults = (args.maxResults as number) ?? 50;
+      const path = `/users?page_size=${Math.min(100, maxResults)}`;
+      const results = await notionPaginate('GET', path, account as NotionAccount | undefined, undefined, Math.ceil(maxResults / 100));
+      const trimmed = results.slice(0, maxResults);
+      if (!trimmed.length) return 'No users found.';
+      return trimmed.map((u: any) => {
+        const kind = u.type === 'bot' ? '[bot]' : '[user]';
+        return `${kind} ${u.name ?? '(no name)'}\n  id: ${u.id}\n  email: ${u.person?.email ?? '-'}`;
+      }).join('\n---\n');
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
@@ -783,7 +1221,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json(jsonrpc(id, {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'google-mcp-server', version: '1.0.0' },
+        serverInfo: { name: 'productivity-mcp-server', version: '2.0.0' },
       }));
     }
 
